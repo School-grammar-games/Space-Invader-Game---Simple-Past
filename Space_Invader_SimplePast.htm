@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Space Past Tense Invaders</title>
+  <style>
+    :root { font-family: system-ui, Arial, sans-serif; }
+    body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #0b1020; color: #e8eefc; }
+    .wrap { width: min(760px, 95vw); }
+    canvas { width: 100%; height: auto; background: #060914; border: 2px solid #2a3566; border-radius: 10px; display: block; }
+    .hud { display: flex; justify-content: space-between; align-items: center; margin: 10px 2px 12px; font-size: 14px; gap: 10px; flex-wrap: wrap; }
+    button {
+      background: #23306a; color: #e8eefc; border: 1px solid #2a3566; padding: 8px 12px; border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.1); }
+    .question {
+      margin: 10px 2px 12px;
+      padding: 10px 12px;
+      background: #0b1026;
+      border: 1px solid #2a3566;
+      border-radius: 10px;
+      color: #e8eefc;
+      font-size: 16px;
+      min-height: 22px;
+    }
+    .hint { opacity: 0.85; font-size: 13px; margin-top: 10px; line-height: 1.35; }
+    .kbd { border: 1px solid #2a3566; border-bottom-width: 2px; padding: 0 6px; border-radius: 6px; background: #0b1026; }
+
+    .controls{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      margin: 12px 2px 6px;
+      user-select:none;
+      touch-action: manipulation;
+    }
+    .controls button{
+      flex:1;
+      font-size: 18px;
+      padding: 14px 12px;
+      border-radius: 12px;
+    }
+    #btnShoot{ flex: 1.2; font-weight: 700; }
+
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div><strong>Score:</strong> <span id="score">0</span></div>
+      <div><strong>Lives:</strong> <span id="lives">3</span></div>
+      <div><strong>Time:</strong> <span id="timer">0:00.0</span></div>
+      <div><strong>Question:</strong> <span id="qnum">1</span></div>
+      <div><button id="restart" type="button">Restart</button></div>
+    </div>
+
+    <div id="question" class="question" aria-live="polite"></div>
+
+    <canvas id="game" width="720" height="480" aria-label="Past Tense Game"></canvas>
+
+    <div class="controls" aria-label="Touch controls">
+      <button id="btnLeft" type="button" aria-label="Move left">◀</button>
+      <button id="btnShoot" type="button" aria-label="Shoot">Shoot</button>
+      <button id="btnRight" type="button" aria-label="Move right">▶</button>
+    </div>
+
+    <div class="hint">
+      Controls: <span class="kbd">←</span>/<span class="kbd">→</span> move, <span class="kbd">Space</span> shoot.<br />
+      Task: Shoot the <strong>correct simple past</strong> form.
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ----------------------------
+    // Canvas setup
+    // ----------------------------
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const timerEl = document.getElementById('timer');
+    const qnumEl = document.getElementById('qnum');
+    const questionEl = document.getElementById('question');
+    const restartBtn = document.getElementById('restart');
+
+    // ----------------------------
+    // Game constants
+    // ----------------------------
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const PLAYER = { w: 44, h: 14, speed: 5 };
+    const BULLET = { w: 4, h: 10, speed: 7, cooldownMs: 250 };
+
+    // Exactly 30 A2-level verbs (base -> simple past).
+    // A2 includes many irregulars; we also include a few regulars students often misspell.
+    const VERBS = [
+      { base: 'go', past: 'went', pp: 'gone' },
+      { base: 'come', past: 'came', pp: 'come' },
+      { base: 'have', past: 'had', pp: 'had' },
+      { base: 'make', past: 'made', pp: 'made' },
+      { base: 'take', past: 'took', pp: 'taken' },
+      { base: 'give', past: 'gave', pp: 'given' },
+      { base: 'get', past: 'got', pp: 'got' },
+      { base: 'see', past: 'saw', pp: 'seen' },
+      { base: 'eat', past: 'ate', pp: 'eaten' },
+      { base: 'drink', past: 'drank', pp: 'drunk' },
+      { base: 'write', past: 'wrote', pp: 'written' },
+      { base: 'read', past: 'read', pp: 'read' }, // (past pronounced /red/)
+      { base: 'buy', past: 'bought', pp: 'bought' },
+      { base: 'bring', past: 'brought', pp: 'brought' },
+      { base: 'think', past: 'thought', pp: 'thought' },
+      { base: 'teach', past: 'taught', pp: 'taught' },
+      { base: 'catch', past: 'caught', pp: 'caught' },
+      { base: 'find', past: 'found', pp: 'found' },
+      { base: 'feel', past: 'felt', pp: 'felt' },
+      { base: 'leave', past: 'left', pp: 'left' },
+      { base: 'meet', past: 'met', pp: 'met' },
+      { base: 'sleep', past: 'slept', pp: 'slept' },
+      { base: 'speak', past: 'spoke', pp: 'spoken' },
+      { base: 'drive', past: 'drove', pp: 'driven' },
+      { base: 'fly', past: 'flew', pp: 'flown' },
+      { base: 'forget', past: 'forgot', pp: 'forgotten' },
+      { base: 'begin', past: 'began', pp: 'begun' },
+      { base: 'choose', past: 'chose', pp: 'chosen' },
+      { base: 'wear', past: 'wore', pp: 'worn' },
+      { base: 'build', past: 'built', pp: 'built' }
+    ];
+
+    const BOX = { w: 170, h: 40, gapX: 18 };
+    const BOX_MOVE = { stepX: 16, stepY: 18, intervalMs: 520 };
+
+    const TOTAL_QUESTIONS = 30;
+
+    // ----------------------------
+    // State
+    // ----------------------------
+    let keys = new Set();
+
+    let player, bullets, boxes, boxDir, boxLastMoveAt;
+    let score, lives;
+    let lastShotAt = 0;
+    let running = true;
+
+    // Timer
+    let startTimeMs = 0;
+    let endTimeMs = 0;
+    let finished = false;
+
+    // Quiz state
+    let bag = [];
+    let qNum = 0;
+    let current = null; // {base, past, pp}
+    let correctAnswer = '';
+
+    // message feedback (brief)
+    let feedbackText = '';
+    let feedbackUntil = 0;
+
+    // ----------------------------
+    // Helpers
+    // ----------------------------
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+    function rectsOverlap(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y &&
+        a.alive !== false &&
+        b.alive !== false
+      );
+    }
+
+    function showFeedback(text, ms = 800) {
+      feedbackText = text;
+      feedbackUntil = performance.now() + ms;
+    }
+
+    function shuffle(arr) {
+      const a = Array.from(arr);
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    function safeLower(s) { return String(s || '').trim().toLowerCase(); }
+
+    function formatTime(ms) {
+      const total = Math.max(0, ms);
+      const minutes = Math.floor(total / 60000);
+      const seconds = Math.floor((total % 60000) / 1000);
+      const tenths = Math.floor((total % 1000) / 100);
+      return `${minutes}:${String(seconds).padStart(2,'0')}.${tenths}`;
+    }
+
+    function updateTimer(now) {
+      if (!timerEl) return;
+      const t = (running ? (now - startTimeMs) : (endTimeMs - startTimeMs));
+      timerEl.textContent = formatTime(t);
+    }
+
+    // Create plausible distractors without being trivially wrong.
+    function makeDistractors(v) {
+      const base = v.base;
+      const past = v.past;
+      const pp = v.pp;
+
+      const opts = new Set();
+      opts.add(past);
+
+      // Common learner errors:
+      // 1) Over-regularisation (add -ed / -d). Example: go -> goed, make -> maked
+      const regularPast = base.endsWith('e') ? (base + 'd') : (base + 'ed');
+      if (safeLower(regularPast) !== safeLower(past)) opts.add(regularPast);
+
+      // 2) Confuse with past participle when it differs.
+      if (pp && safeLower(pp) !== safeLower(past)) opts.add(pp);
+
+      // 3) Vowel confusion / spelling confusion (small change) - only if it produces a new string.
+      // We keep this conservative to avoid nonsense forms.
+      function vowelSwap(s) {
+        const rules = [
+          [/ea/g, 'ee'],
+          [/ee/g, 'ea'],
+          [/ou/g, 'au'],
+          [/au/g, 'ou'],
+          [/o/g, 'ou'],
+          [/i/g, 'e'],
+          [/e/g, 'i']
+        ];
+        for (const [re, rep] of rules) {
+          if (re.test(s)) return s.replace(re, rep);
+        }
+        return s;
+      }
+      const vs = vowelSwap(past);
+      if (safeLower(vs) !== safeLower(past)) opts.add(vs);
+
+      // Ensure we end up with 3 unique options: correct + 2 distractors.
+      // If we still have too few, add "present" form as a distractor (plausible but not too easy).
+      if (opts.size < 3) opts.add(base);
+
+      // Last resort: another common mistake for some verbs: use base + 't' (rare, but still plausible in learner writing)
+      if (opts.size < 3) opts.add(base + 't');
+
+      // Convert to array and remove duplicates by case.
+      const arr = [];
+      const seen = new Set();
+      for (const o of opts) {
+        const key = safeLower(o);
+        if (!seen.has(key)) {
+          seen.add(key);
+          arr.push(o);
+        }
+      }
+
+      // Ensure correct is included
+      if (!arr.some(x => safeLower(x) === safeLower(past))) arr.unshift(past);
+
+      // Pick 3: keep correct and choose 2 distractors that are not identical to correct.
+      const correct = past;
+      const distractors = arr.filter(x => safeLower(x) !== safeLower(correct));
+
+      // Prefer distractors in this order: regularPast, pp, vs, base...
+      // Already inserted roughly in that order via Set insertion.
+      const chosen = [correct];
+      for (const d of distractors) {
+        if (chosen.length >= 3) break;
+        chosen.push(d);
+      }
+
+      // If still not enough, pad with other verb past forms (rare).
+      if (chosen.length < 3) {
+        const otherPasts = shuffle(VERBS.map(x => x.past)).filter(x => safeLower(x) !== safeLower(correct));
+        for (const op of otherPasts) {
+          if (chosen.length >= 3) break;
+          if (!chosen.some(x => safeLower(x) === safeLower(op))) chosen.push(op);
+        }
+      }
+
+      return shuffle(chosen.slice(0, 3));
+    }
+
+    function updateHud() {
+      scoreEl.textContent = String(score);
+      livesEl.textContent = String(lives);
+      qnumEl.textContent = String(qNum);
+    }
+
+    function setQuestionText() {
+      questionEl.textContent = `Which is the correct simple past form of “${current.base}”?`;
+    }
+
+    function buildBoxes(options) {
+      boxes = [];
+
+      const totalW = options.length * BOX.w + (options.length - 1) * BOX.gapX;
+      const startX = (W - totalW) / 2;
+      const startY = 70;
+
+      for (let i = 0; i < options.length; i++) {
+        boxes.push({
+          x: startX + i * (BOX.w + BOX.gapX),
+          y: startY,
+          w: BOX.w,
+          h: BOX.h,
+          text: options[i],
+          alive: true
+        });
+      }
+
+      boxDir = 1;
+      boxLastMoveAt = performance.now();
+    }
+
+    function boxesBounds() {
+      let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const bx of boxes) {
+        if (!bx.alive) continue;
+        minX = Math.min(minX, bx.x);
+        maxX = Math.max(maxX, bx.x + bx.w);
+        maxY = Math.max(maxY, bx.y + bx.h);
+      }
+      return { minX, maxX, maxY };
+    }
+
+    function refillBag() {
+      bag = shuffle(VERBS);
+    }
+
+    function nextQuestion() {
+      if (!bag.length) refillBag();
+      current = bag.pop();
+      qNum += 1;
+
+      correctAnswer = current.past;
+
+      const options = makeDistractors(current);
+      buildBoxes(options);
+      bullets.length = 0;
+
+      setQuestionText();
+      updateHud();
+    }
+
+    function restartQuestionSameVerb() {
+      const options = makeDistractors(current);
+      buildBoxes(options);
+      bullets.length = 0;
+      setQuestionText();
+      updateHud();
+    }
+
+    // ----------------------------
+    // Game setup
+    // ----------------------------
+    function resetGame() {
+      score = 0;
+      lives = 3;
+      qNum = 0;
+      running = true;
+      finished = false;
+      startTimeMs = performance.now();
+      endTimeMs = startTimeMs;
+
+      player = {
+        x: (W - PLAYER.w) / 2,
+        y: H - 40,
+        w: PLAYER.w,
+        h: PLAYER.h
+      };
+
+      bullets = [];
+      refillBag();
+      nextQuestion();
+
+      feedbackText = '';
+      feedbackUntil = 0;
+    }
+
+    // ----------------------------
+    // Input
+    // ----------------------------
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+      keys.add(e.key);
+    });
+
+    window.addEventListener('keyup', (e) => {
+      keys.delete(e.key);
+    });
+
+    restartBtn.addEventListener('click', resetGame);
+
+    
+    // ----------------------------
+    // Touch / on-screen controls (tablet friendly)
+    // ----------------------------
+    let moveDir = 0; // -1 left, +1 right, 0 none
+
+    const btnLeft = document.getElementById('btnLeft');
+    const btnRight = document.getElementById('btnRight');
+    const btnShoot = document.getElementById('btnShoot');
+
+    function bindHoldButton(btn, dir) {
+      if (!btn) return;
+      const down = (e) => { e.preventDefault(); moveDir = dir; };
+      const up = (e) => { e.preventDefault(); if (moveDir === dir) moveDir = 0; };
+
+      btn.addEventListener('pointerdown', down);
+      btn.addEventListener('pointerup', up);
+      btn.addEventListener('pointercancel', up);
+      btn.addEventListener('pointerleave', up);
+
+      // Fallback for older browsers
+      btn.addEventListener('touchstart', down, { passive: false });
+      btn.addEventListener('touchend', up, { passive: false });
+      btn.addEventListener('touchcancel', up, { passive: false });
+      btn.addEventListener('mousedown', down);
+      btn.addEventListener('mouseup', up);
+      btn.addEventListener('mouseleave', up);
+    }
+
+    bindHoldButton(btnLeft, -1);
+    bindHoldButton(btnRight, +1);
+
+    if (btnShoot) {
+      const shootNow = (e) => {
+        e.preventDefault();
+        // Shoot immediately using current timestamp
+        tryShoot(performance.now());
+      };
+      btnShoot.addEventListener('pointerdown', shootNow);
+      btnShoot.addEventListener('touchstart', shootNow, { passive: false });
+      btnShoot.addEventListener('mousedown', shootNow);
+    }
+
+    // Reduce accidental page scrolling during gameplay
+    canvas.style.touchAction = 'none';
+
+
+    // ----------------------------
+    // Game mechanics
+    // ----------------------------
+    function tryShoot(now) {
+      if (now - lastShotAt < BULLET.cooldownMs) return;
+
+      bullets.push({
+        x: player.x + player.w / 2 - BULLET.w / 2,
+        y: player.y - BULLET.h,
+        w: BULLET.w,
+        h: BULLET.h,
+        alive: true
+      });
+
+      lastShotAt = now;
+    }
+
+    function movePlayer() {
+      const left = keys.has('ArrowLeft') || moveDir === -1;
+      const right = keys.has('ArrowRight') || moveDir === 1;
+      if (left) player.x -= PLAYER.speed;
+      if (right) player.x += PLAYER.speed;
+      player.x = clamp(player.x, 8, W - player.w - 8);
+    }
+
+    function moveBullets() {
+      for (const b of bullets) b.y -= BULLET.speed;
+      bullets = bullets.filter(b => b.y + b.h > 0 && !b._dead);
+    }
+
+    function moveBoxes(now) {
+      if (now - boxLastMoveAt < BOX_MOVE.intervalMs) return;
+      boxLastMoveAt = now;
+
+      const { minX, maxX } = boxesBounds();
+      if (!isFinite(minX) || !isFinite(maxX)) return;
+
+      const hitRight = maxX + BOX_MOVE.stepX >= W - 10;
+      const hitLeft = minX - BOX_MOVE.stepX <= 10;
+
+      if ((boxDir === 1 && hitRight) || (boxDir === -1 && hitLeft)) {
+        for (const bx of boxes) bx.y += BOX_MOVE.stepY;
+        boxDir *= -1;
+      } else {
+        for (const bx of boxes) bx.x += BOX_MOVE.stepX * boxDir;
+      }
+    }
+
+    function loseLife(reasonText) {
+      lives -= 1;
+      updateHud();
+
+      if (lives <= 0) {
+        running = false;
+        finished = false;
+        endTimeMs = performance.now();
+        return;
+      }
+
+      showFeedback(reasonText, 900);
+      // Restart the same verb with new option order (keeps the learning focus).
+      restartQuestionSameVerb();
+    }
+
+    function handleCollisions() {
+      // Bullet vs boxes
+      for (const b of bullets) {
+        if (b._dead) continue;
+
+        for (const bx of boxes) {
+          if (!bx.alive) continue;
+
+          if (rectsOverlap(b, bx)) {
+            b._dead = true;
+
+            const hitText = safeLower(bx.text);
+            const correct = safeLower(correctAnswer);
+
+            if (hitText === correct) {
+              score += 10;
+              updateHud();
+              showFeedback('Correct!', 700);
+
+              if (qNum >= TOTAL_QUESTIONS) {
+                running = false;
+                finished = true;
+                endTimeMs = performance.now();
+              } else {
+                nextQuestion();
+              }
+            } else {
+              loseLife('Wrong! -1 life');
+            }
+            break;
+          }
+        }
+      }
+
+      // If boxes reach player line => lose a life (pressure mechanic)
+      const { maxY } = boxesBounds();
+      if (running && isFinite(maxY) && maxY >= player.y) {
+        loseLife('Too late! -1 life');
+      }
+    }
+
+    // ----------------------------
+    // Rendering
+    // ----------------------------
+    function drawBackground() {
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = '#9bb3ff';
+      for (let i = 0; i < 70; i++) {
+        const x = (i * 97) % W;
+        const y = (i * 53) % H;
+        ctx.fillRect(x, y, 2, 2);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawPlayer() {
+      ctx.fillStyle = '#e8eefc';
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+      ctx.fillRect(player.x + player.w / 2 - 4, player.y - 8, 8, 8);
+    }
+
+    function drawBullets() {
+      ctx.fillStyle = '#ffd66b';
+      for (const b of bullets) ctx.fillRect(b.x, b.y, b.w, b.h);
+    }
+
+    function drawBoxes() {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '18px system-ui, Arial';
+
+      for (const bx of boxes) {
+        if (!bx.alive) continue;
+
+        ctx.fillStyle = '#7ee081';
+        ctx.fillRect(bx.x, bx.y, bx.w, bx.h);
+
+        ctx.strokeStyle = '#e8eefc';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
+
+        ctx.fillStyle = '#060914';
+        ctx.fillText(bx.text, bx.x + bx.w / 2, bx.y + bx.h / 2);
+      }
+    }
+
+    function drawFeedback(now) {
+      if (!feedbackText || now > feedbackUntil) return;
+
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, H - 70, W, 70);
+
+      ctx.fillStyle = '#e8eefc';
+      ctx.font = '18px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(feedbackText, W / 2, H - 35);
+    }
+
+    function drawOverlay() {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = '#e8eefc';
+      ctx.font = '28px system-ui, Arial';
+      ctx.textAlign = 'center';
+
+      const title = finished ? 'Finished!' : 'Game Over';
+      ctx.fillText(title, W / 2, H / 2 - 28);
+
+      ctx.font = '18px system-ui, Arial';
+      const t = formatTime(endTimeMs - startTimeMs);
+      ctx.fillText(`Time: ${t}`, W / 2, H / 2 + 6);
+
+      ctx.font = '16px system-ui, Arial';
+      ctx.fillText('Press Restart to play again', W / 2, H / 2 + 34);
+    }
+
+    // ----------------------------
+    // Main loop
+    // ----------------------------
+    function loop(now) {
+      updateTimer(now);
+
+      if (running) {
+        movePlayer();
+        if (keys.has(' ')) tryShoot(now);
+        moveBullets();
+        moveBoxes(now);
+        handleCollisions();
+      }
+
+      drawBackground();
+      drawBoxes();
+      drawPlayer();
+      drawBullets();
+      drawFeedback(now);
+
+      if (!running) drawOverlay();
+
+      requestAnimationFrame(loop);
+    }
+
+    // Start
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

@@ -592,68 +592,431 @@
   // DRAWING
   // ----------------------------
   function drawBackground() {
-    const hillY = 420;
-    const hillOffset = (camera.x * 0.25) % 800;
-
+    // Sky
     ctx.save();
-    ctx.translate(-hillOffset, 0);
-    for (let i = -1; i < 6; i++) {
-      const baseX = i * 800;
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(45, 120, 90, 0.18)";
-      ctx.ellipse(baseX + 260, hillY + 60, 340, 150, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(45, 120, 90, 0.28)";
-      ctx.ellipse(baseX + 540, hillY + 80, 380, 170, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    g.addColorStop(0, "#bfe9ff");
+    g.addColorStop(0.55, "#d9f4ff");
+    g.addColorStop(1, "#f4fbff");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Subtle vignette
+    const v = ctx.createRadialGradient(canvas.width*0.5, canvas.height*0.45, 40, canvas.width*0.5, canvas.height*0.45, canvas.width*0.9);
+    v.addColorStop(0, "rgba(0,0,0,0)");
+    v.addColorStop(1, "rgba(0,0,0,0.08)");
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
 
-    const cloudOffset = (camera.x * 0.45) % 700;
+    // Deterministic PRNG (for background variation without flicker)
+    function prng(seed) {
+      let x = seed >>> 0;
+      return function() {
+        x ^= x << 13; x >>>= 0;
+        x ^= x >> 17; x >>>= 0;
+        x ^= x << 5;  x >>>= 0;
+        return (x >>> 0) / 4294967296;
+      };
+    }
+
+    // Shared shape helpers
+    function tri(ax, ay, bx, by, cx, cy, fill, shadow = true) {
+      ctx.save();
+      if (shadow) {
+        ctx.shadowColor = "rgba(0,0,0,0.14)";
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 6;
+      }
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(cx, cy);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function hill(x, y, w, h, fill, shadow = true) {
+      ctx.save();
+      if (shadow) {
+        ctx.shadowColor = "rgba(0,0,0,0.12)";
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 6;
+      }
+      ctx.beginPath();
+      ctx.ellipse(x, y, w, h, 0, 0, Math.PI*2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function tree(tx, ty, s=1) {
+      // Simple low-poly tree (trunk + canopy)
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.14)";
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 6;
+
+      // trunk
+      ctx.fillStyle = "#b56b3a";
+      roundRect(tx - 10*s, ty + 12*s, 20*s, 50*s, 10*s, true);
+
+      // canopy (faceted)
+      const greens = ["#58c27d", "#4fb973", "#66cc86"];
+      tri(tx - 56*s, ty + 22*s, tx, ty - 62*s, tx + 56*s, ty + 22*s, greens[0]);
+      tri(tx - 40*s, ty + 22*s, tx, ty - 62*s, tx + 8*s, ty + 22*s, "rgba(0,0,0,0.05)", false);
+      tri(tx - 44*s, ty + 22*s, tx - 10*s, ty - 16*s, tx + 48*s, ty + 22*s, greens[1], false);
+
+      ctx.restore();
+    }
+
+    // Puffy clouds with soft shadow
+    function puff(x, y, s=1) {
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.16)";
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 6;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(x, y, 56*s, 30*s, 0, 0, Math.PI*2);
+      ctx.ellipse(x + 42*s, y - 10*s, 48*s, 26*s, 0, 0, Math.PI*2);
+      ctx.ellipse(x + 92*s, y, 60*s, 32*s, 0, 0, Math.PI*2);
+      ctx.ellipse(x + 52*s, y + 16*s, 68*s, 32*s, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      // highlight
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(x + 18*s, y - 10*s, 22*s, 12*s, 0, 0, Math.PI*2);
+      ctx.ellipse(x + 62*s, y - 16*s, 18*s, 10*s, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    const baseY = 420;
+
+    // The background changes by "world chunk" to avoid repeating the same mountains.
+    // Chunk index is derived from camera.x so scenery swaps deterministically as you move.
+    const chunkW = 900;
+    const chunk = Math.floor(camera.x / chunkW);
+
+    // Parallax offsets
+    const pFar = camera.x * 0.08;
+    const pMid = camera.x * 0.14;
+
+    // Draw a few chunks around the camera for seamless scrolling
+    const startChunk = chunk - 2;
+    const endChunk = chunk + 3;
+
+    for (let ci = startChunk; ci <= endChunk; ci++) {
+      const rng = prng((ci + 11) * 1337 ^ (levelIndex + 1) * 977);
+      const theme = ci % 3; // 0: warm peaks, 1: green hills, 2: rocky cliffs
+      const xBase = ci * chunkW;
+
+      // FAR layer
+      ctx.save();
+      ctx.translate(-(pFar), 0);
+
+      if (theme === 0) {
+        const cols = ["#f2c56d", "#eab85b", "#f0c97a"];
+        for (let i = 0; i < 4; i++) {
+          const x0 = xBase + i * 260 + (rng() * 40 - 20);
+          const peak = 210 + rng() * 80;
+          tri(x0, baseY, x0 + 170, baseY - peak, x0 + 340, baseY, cols[i % cols.length]);
+          tri(x0 + 140, baseY, x0 + 170, baseY - peak, x0 + 220, baseY, "rgba(0,0,0,0.06)", false);
+        }
+      } else if (theme === 1) {
+        const cols = ["#b9e6c5", "#a9deba", "#c6efcf"];
+        for (let i = 0; i < 3; i++) {
+          const x0 = xBase + 140 + i * 320;
+          hill(x0, baseY - 80 - rng()*40, 220 + rng()*40, 140 + rng()*30, cols[i % cols.length]);
+          hill(x0 + 120, baseY - 70, 160, 110, "rgba(0,0,0,0.05)", false);
+        }
+      } else {
+        const cols = ["#c8d0d8", "#bcc6cf", "#d6dde4"];
+        for (let i = 0; i < 3; i++) {
+          const x0 = xBase + i * 300 + 60;
+          const w = 220 + rng()*60;
+          const h = 180 + rng()*90;
+          // chunky cliff faces
+          ctx.save();
+          ctx.shadowColor = "rgba(0,0,0,0.14)";
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetY = 6;
+          ctx.fillStyle = cols[i % cols.length];
+          ctx.beginPath();
+          ctx.moveTo(x0, baseY);
+          ctx.lineTo(x0 + w*0.25, baseY - h);
+          ctx.lineTo(x0 + w*0.70, baseY - h*0.85);
+          ctx.lineTo(x0 + w, baseY);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+
+          // facet shade
+          tri(x0 + w*0.55, baseY, x0 + w*0.70, baseY - h*0.85, x0 + w*0.82, baseY, "rgba(0,0,0,0.06)", false);
+        }
+      }
+      ctx.restore();
+
+      // MID layer
+      ctx.save();
+      ctx.translate(-(pMid), 0);
+      if (theme === 0) {
+        const cols = ["#58c27d", "#4fb973", "#66cc86"];
+        for (let i = 0; i < 4; i++) {
+          const x0 = xBase + 90 + i * 230 + (rng() * 30 - 15);
+          const peak = 150 + rng() * 70;
+          tri(x0, baseY + 30, x0 + 150, baseY - peak, x0 + 300, baseY + 30, cols[i % cols.length]);
+          tri(x0 + 110, baseY + 30, x0 + 150, baseY - peak, x0 + 210, baseY + 30, "rgba(0,0,0,0.07)", false);
+        }
+      } else if (theme === 1) {
+        const cols = ["#63d36f", "#54c862", "#66cc86"];
+        for (let i = 0; i < 4; i++) {
+          const x0 = xBase + 80 + i * 240;
+          hill(x0, baseY + 30, 170 + rng()*30, 110 + rng()*20, cols[i % cols.length]);
+        }
+        // occasional trees
+        for (let t = 0; t < 2; t++) {
+          const tx = xBase + 220 + t*360 + rng()*60;
+          const ty = baseY + 34;
+          tree(tx - pMid, ty, 0.9);
+        }
+      } else {
+        const cols = ["#76c99f", "#64be94", "#86d3aa"];
+        for (let i = 0; i < 4; i++) {
+          const x0 = xBase + 70 + i * 240;
+          const peak = 140 + rng() * 60;
+          tri(x0, baseY + 40, x0 + 140, baseY - peak, x0 + 280, baseY + 40, cols[i % cols.length]);
+        }
+      }
+      ctx.restore();
+    }
+
+    // Clouds (global, looping)
+    const cloudOffset = (camera.x * 0.35) % 720;
     ctx.save();
     ctx.translate(-cloudOffset, 0);
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    for (let i = -1; i < 6; i++) {
-      const x = i * 700 + 140;
-      const y = 90 + (i % 2) * 30;
-      cloud(x, y, 1.0);
-      cloud(x + 260, y + 40, 0.85);
+    for (let i = -1; i < 7; i++) {
+      const cx = i * 720 + 120;
+      const cy = 90 + (i % 2) * 24;
+      puff(cx, cy, 0.95);
+      puff(cx + 280, cy + 34, 0.78);
     }
     ctx.restore();
-
-    function cloud(x, y, s) {
-      ctx.beginPath();
-      ctx.ellipse(x, y, 52*s, 28*s, 0, 0, Math.PI*2);
-      ctx.ellipse(x+40*s, y-10*s, 46*s, 26*s, 0, 0, Math.PI*2);
-      ctx.ellipse(x+85*s, y, 56*s, 30*s, 0, 0, Math.PI*2);
-      ctx.ellipse(x+45*s, y+15*s, 64*s, 30*s, 0, 0, Math.PI*2);
-      ctx.fill();
-    }
   }
 
+
+
   function drawPlatforms() {
-    const root = getComputedStyle(document.documentElement);
-    const ground = root.getPropertyValue("--ground").trim();
-    const ground2 = root.getPropertyValue("--ground2").trim();
+    // Ground keeps the 3D soil/grass look; floating platforms become wooden planks.
+    const grassTop = "#63d36f";
+    const grassTop2 = "#54c862";
+    const dirt = "#b1683d";
+    const dirt2 = "#9f5b34";
+
+    function tileFace(x, y, w, h, alpha=0.12) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 2;
+      const step = 26;
+      for (let xx = x + step; xx < x + w; xx += step) {
+        ctx.beginPath();
+        ctx.moveTo(xx, y + 8);
+        ctx.lineTo(xx, y + h - 8);
+        ctx.stroke();
+      }
+      for (let yy = y + step; yy < y + h; yy += step) {
+        ctx.beginPath();
+        ctx.moveTo(x + 8, yy);
+        ctx.lineTo(x + w - 8, yy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function groundBlock(sx, sy, w, h) {
+      const capH = Math.max(10, Math.min(16, h));
+      const bevel = 10;
+
+      // Drop shadow
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.22)";
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 10;
+      ctx.fillStyle = dirt2;
+      roundRect(sx, sy, w, h, 10, true);
+      ctx.restore();
+
+      // Dirt body
+      ctx.fillStyle = dirt;
+      roundRect(sx, sy, w, h, 10, true);
+
+      // Facet shade
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.moveTo(sx + w, sy + 10);
+      ctx.lineTo(sx + w - bevel, sy + 18);
+      ctx.lineTo(sx + w - bevel, sy + h - 14);
+      ctx.lineTo(sx + w, sy + h - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Inner band
+      ctx.fillStyle = dirt2;
+      ctx.fillRect(sx + 2, sy + capH + 2, w - 4, Math.max(0, h - capH - 4));
+
+      // Seams
+      tileFace(sx + 6, sy + capH + 6, w - 12, h - capH - 12, 0.10);
+
+      // Grass cap
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.18)";
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 6;
+      ctx.fillStyle = grassTop;
+      roundRect(sx - 2, sy - 2, w + 4, capH + 6, 12, true);
+      ctx.restore();
+
+      // Grass highlight
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#fff";
+      roundRect(sx + 6, sy + 2, w - 12, Math.max(6, capH*0.45), 10, true);
+      ctx.restore();
+
+      // Grass underside shade
+      ctx.fillStyle = grassTop2;
+      ctx.fillRect(sx - 2, sy + capH + 1, w + 4, 6);
+
+      // Outline
+      ctx.strokeStyle = "rgba(15,23,42,0.18)";
+      ctx.lineWidth = 2;
+      roundRect(sx, sy, w, h, 10, false);
+    }
+
+    function woodPlatform(sx, sy, w, h) {
+      // render as a chunky plank with plank seams + subtle grain
+      const r = 12;
+      const topH = Math.max(10, Math.min(16, h));
+
+      // shadow
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.25)";
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 10;
+      ctx.fillStyle = "rgba(0,0,0,0.10)";
+      roundRect(sx, sy, w, h, r, true);
+      ctx.restore();
+
+      // body gradient
+      const grad = ctx.createLinearGradient(sx, sy, sx, sy + h);
+      grad.addColorStop(0, "#c98a55");
+      grad.addColorStop(0.55, "#b77745");
+      grad.addColorStop(1, "#9f643a");
+      ctx.fillStyle = grad;
+      roundRect(sx, sy, w, h, r, true);
+
+      // top highlight strip
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#fff";
+      roundRect(sx + 6, sy + 4, w - 12, Math.min(10, topH), 10, true);
+      ctx.restore();
+
+      // plank seams (vertical)
+      const plankCount = Math.max(2, Math.round(w / 90));
+      const plankW = w / plankCount;
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = "rgba(15,23,42,0.35)";
+      ctx.lineWidth = 2;
+      for (let i = 1; i < plankCount; i++) {
+        const x = sx + i * plankW;
+        ctx.beginPath();
+        ctx.moveTo(x, sy + 6);
+        ctx.lineTo(x, sy + h - 6);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // wood grain (subtle wavy lines)
+      ctx.save();
+      ctx.globalAlpha = 0.10;
+      ctx.strokeStyle = "rgba(15,23,42,0.45)";
+      ctx.lineWidth = 2;
+      const lines = Math.max(2, Math.round(h / 10));
+      for (let i = 0; i < lines; i++) {
+        const yy = sy + 10 + i * (h - 20) / Math.max(1, lines - 1);
+        ctx.beginPath();
+        ctx.moveTo(sx + 10, yy);
+        const amp = 4;
+        for (let xx = sx + 10; xx <= sx + w - 10; xx += 30) {
+          ctx.quadraticCurveTo(xx + 15, yy + (i % 2 ? amp : -amp), xx + 30, yy);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // nails
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = "rgba(15,23,42,0.65)";
+      for (let i = 0; i < plankCount; i++) {
+        const nx1 = sx + i * plankW + 14;
+        const nx2 = sx + (i + 1) * plankW - 14;
+        const ny = sy + topH + 10;
+        for (const nx of [nx1, nx2]) {
+          ctx.beginPath();
+          ctx.ellipse(nx, ny, 3.2, 3.2, 0, 0, Math.PI*2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+
+      // underside shade band
+      ctx.save();
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#000";
+      roundRect(sx + 4, sy + h - 12, w - 8, 10, 8, true);
+      ctx.restore();
+
+      // outline
+      ctx.strokeStyle = "rgba(15,23,42,0.22)";
+      ctx.lineWidth = 2;
+      roundRect(sx, sy, w, h, r, false);
+
+      // optional simple supports on thicker platforms
+      if (h >= 26 && w >= 90) {
+        ctx.save();
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = "rgba(0,0,0,0.20)";
+        const postW = 10;
+        const postH = Math.min(26, h - 6);
+        const left = sx + 18;
+        const right = sx + w - 18 - postW;
+        roundRect(left, sy + h - postH, postW, postH, 6, true);
+        roundRect(right, sy + h - postH, postW, postH, 6, true);
+        ctx.restore();
+      }
+    }
 
     for (const plat of platforms) {
       const sx = plat.x - camera.x;
       const sy = plat.y - camera.y;
-
-      ctx.fillStyle = ground;
-      ctx.fillRect(sx, sy, plat.w, plat.h);
-
-      ctx.fillStyle = ground2;
-      const stripe = Math.max(6, plat.h * 0.35);
-      ctx.fillRect(sx, sy + stripe, plat.w, plat.h - stripe);
-
-      ctx.strokeStyle = "rgba(255,255,255,0.20)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(sx + 1, sy + 1, plat.w - 2, plat.h - 2);
+      const isGround = plat.h === GROUND_H;
+      if (isGround) groundBlock(sx, sy, plat.w, plat.h);
+      else woodPlatform(sx, sy, plat.w, plat.h);
     }
   }
-
   function drawPlayer(p) {
     const x = p.x - camera.x;
     const y = p.y - camera.y;
@@ -682,20 +1045,40 @@
       const x = c.x - camera.x;
       const y = c.y - camera.y;
 
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      roundRect(x, y, c.w, c.h, 12, true);
+      // Soft shadow
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.22)";
+      ctx.shadowBlur = 16;
+      ctx.shadowOffsetY = 10;
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      roundRect(x, y, c.w, c.h, 14, true);
+      ctx.restore();
 
-      ctx.strokeStyle = "rgba(15,23,42,0.25)";
+      // Face
+      ctx.fillStyle = "rgba(255,255,255,0.98)";
+      roundRect(x, y, c.w, c.h, 14, true);
+
+      // Top lip (subtle 3D cue)
+      ctx.save();
+      ctx.globalAlpha = 0.10;
+      ctx.fillStyle = "#000";
+      roundRect(x + 2, y + 2, c.w - 4, 12, 12, true);
+      ctx.restore();
+
+      // Border
+      ctx.strokeStyle = "rgba(15,23,42,0.22)";
       ctx.lineWidth = 2;
-      roundRect(x, y, c.w, c.h, 12, false);
+      roundRect(x, y, c.w, c.h, 14, false);
 
+      // Label
       ctx.fillStyle = "rgba(15,23,42,0.92)";
-      ctx.font = "700 17px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.font = "800 17px system-ui, -apple-system, Segoe UI, Roboto, Arial";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(c.label, x + c.w/2, y + c.h/2 + 1);
     }
   }
+
 
   function drawTopUI() {
     const pad = 14;
